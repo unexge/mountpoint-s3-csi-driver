@@ -158,6 +158,10 @@ clean:
 
 # Kubebuilder commands
 
+.PHONY: manifests
+manifests: ## Generate CustomResourceDefinition objects.
+	controller-gen crd paths="./..." output:crd:artifacts:config=deploy/kubernetes/base
+
 .PHONY: generate
 generate: ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
