@@ -155,3 +155,9 @@ check_style:
 .PHONY: clean
 clean:
 	rm -rf bin/ && docker system prune
+
+# Kubebuilder commands
+
+.PHONY: generate
+generate: ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
