@@ -118,6 +118,7 @@ login_registry:
 bin:
 	mkdir -p bin
 	CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags ${LDFLAGS} -o bin/aws-s3-csi-driver ./cmd/aws-s3-csi-driver/
+	CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags ${LDFLAGS} -o bin/aws-s3-csi-controller ./cmd/
 	CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags ${LDFLAGS} -o bin/install-mp ./cmd/install-mp/
 
 .PHONY: install-go-test-coverage
@@ -159,8 +160,11 @@ clean:
 # Kubebuilder commands
 
 .PHONY: manifests
-manifests: ## Generate CustomResourceDefinition objects.
-	controller-gen crd paths="./..." output:crd:artifacts:config=deploy/kubernetes/base
+manifests: ## Generate Role and CustomResourceDefinition objects.
+	controller-gen rbac:roleName=s3-csi-driver-controller-mountpoint-claim-role crd paths="./..." \
+	   output:crd:artifacts:config=charts/aws-mountpoint-s3-csi-driver/templates \
+	   output:rbac:artifacts:config=charts/aws-mountpoint-s3-csi-driver/templates; \
+	mv charts/aws-mountpoint-s3-csi-driver/templates/{role.yaml,controller-mountpointclaims-role.yaml}
 
 .PHONY: generate
 generate: ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

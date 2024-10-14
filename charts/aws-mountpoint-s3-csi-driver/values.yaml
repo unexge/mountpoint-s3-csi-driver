@@ -74,6 +74,12 @@ sidecars:
         name: plugin-dir
     resources: {}
 
+controller:
+  serviceAccount:
+    # Specifies whether a service account should be created
+    create: true
+    name: s3-csi-driver-controller-sa
+
 nameOverride: ""
 fullnameOverride: ""
 

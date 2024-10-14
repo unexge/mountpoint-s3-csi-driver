@@ -63,6 +63,7 @@ COPY --from=mp_builder /lib64/libgcc_s.so.1 /mountpoint-s3/bin/
 
 # Install driver
 COPY --from=builder /go/src/github.com/awslabs/mountpoint-s3-csi-driver/bin/aws-s3-csi-driver /bin/aws-s3-csi-driver
+COPY --from=builder /go/src/github.com/awslabs/mountpoint-s3-csi-driver/bin/aws-s3-csi-controller /bin/aws-s3-csi-controller
 COPY --from=builder /go/src/github.com/awslabs/mountpoint-s3-csi-driver/bin/install-mp /bin/install-mp
 
 ENTRYPOINT ["/bin/aws-s3-csi-driver"]

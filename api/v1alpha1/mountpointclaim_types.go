@@ -8,18 +8,19 @@ import (
 
 // MountpointClaimSpec defines the desired state of MountpointClaim
 type MountpointClaimSpec struct {
-	NodeID   string `json:"nodeID,omitempty"`
+	NodeID   string `json:"nodeId,omitempty"`
 	PodID    string `json:"podId,omitempty"`
-	VolumeID string `json:"volumeID,omitempty"`
+	VolumeID string `json:"volumeId,omitempty"`
 }
 
 // MountpointClaimStatus defines the observed state of MountpointClaim
 type MountpointClaimStatus struct {
 	Status          string  `json:"status,omitempty"`
-	MountpointPodID *string `json:"mountpointPodID,omitempty"`
+	MountpointPodID *string `json:"mountpointPodId,omitempty"`
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Cluster,shortName=mpc
 // +kubebuilder:subresource:status
 
 // MountpointClaim is the Schema for the mountpointclaims API
