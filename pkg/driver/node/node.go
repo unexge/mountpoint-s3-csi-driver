@@ -18,6 +18,8 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"maps"
 	"os"
 	"strings"
@@ -25,10 +27,16 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	"k8s.io/mount-utils"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/awslabs/aws-s3-csi-driver/api/v1alpha1"
+	s3csiawscomv1alpha1 "github.com/awslabs/aws-s3-csi-driver/api/v1alpha1"
 	"github.com/awslabs/aws-s3-csi-driver/pkg/driver/node/mounter"
 )
 
@@ -56,10 +64,19 @@ type S3NodeServer struct {
 	NodeID             string
 	Mounter            mounter.Mounter
 	credentialProvider *mounter.CredentialProvider
+	client             client.Client
 }
 
 func NewS3NodeServer(nodeID string, mounter mounter.Mounter, credentialProvider *mounter.CredentialProvider) *S3NodeServer {
-	return &S3NodeServer{NodeID: nodeID, Mounter: mounter, credentialProvider: credentialProvider}
+	scheme := runtime.NewScheme()
+	s3csiawscomv1alpha1.AddToScheme(scheme)
+	kubeconfig := ctrl.GetConfigOrDie()
+	client, err := client.New(kubeconfig, client.Options{Scheme: scheme})
+	if err != nil {
+		klog.Fatal("Failed to create kubernetes client")
+	}
+
+	return &S3NodeServer{client: client, NodeID: nodeID, Mounter: mounter, credentialProvider: credentialProvider}
 }
 
 func (ns *S3NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
@@ -91,6 +108,11 @@ func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePubl
 	}
 
 	volumeContext := req.GetVolumeContext()
+
+	podID := volumeContext[mounter.VolumeCtxPodUID]
+	if podID == "" {
+		return nil, status.Error(codes.InvalidArgument, "Missing Pod info")
+	}
 
 	bucket, ok := volumeContext[volumeCtxBucketName]
 	if !ok {
@@ -130,6 +152,27 @@ func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePubl
 			}
 		}
 		mountpointArgs = compileMountOptions(mountpointArgs, mountFlags)
+	}
+
+	mountpointClaimName := fmt.Sprintf("mpc-s3-%x", sha256.Sum256([]byte(ns.NodeID+volumeID+podID)))
+
+	var mountpointClaim v1alpha1.MountpointClaim
+	err := ns.client.Get(ctx, client.ObjectKey{Name: mountpointClaimName}, &mountpointClaim)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+
+	if apierrors.IsNotFound(err) {
+		mountpointClaim.Name = mountpointClaimName
+		mountpointClaim.Spec = v1alpha1.MountpointClaimSpec{
+			NodeID:   ns.NodeID,
+			VolumeID: volumeID,
+			PodID:    podID,
+		}
+		err = ns.client.Create(ctx, &mountpointClaim)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	credentials, err := ns.credentialProvider.Provide(ctx, req.VolumeId, req.VolumeContext, mountpointArgs)
