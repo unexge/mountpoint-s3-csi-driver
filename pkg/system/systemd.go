@@ -10,6 +10,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"k8s.io/klog/v2"
+	"slices"
 )
 
 const (
@@ -30,13 +31,13 @@ type DbusConn interface {
 
 // DbusObject is a wrapper for dbus.BusObject external type
 type DbusObject interface {
-	Go(method string, flags dbus.Flags, ch chan *dbus.Call, args ...interface{}) *dbus.Call
+	Go(method string, flags dbus.Flags, ch chan *dbus.Call, args ...any) *dbus.Call
 }
 
 // DbusProperty is used for dbus arguments that are arrays of key value pairs
 type DbusProperty struct {
 	Name  string
-	Value interface{}
+	Value any
 }
 
 type DbusPropertySet struct {
@@ -122,8 +123,8 @@ func (sc *SystemdOsConnection) StartTransientUnit(ctx context.Context, name stri
 	return job, err
 }
 
-func (sc *SystemdOsConnection) callDbus(ctx context.Context, method string, ret interface{},
-	args ...interface{}) error {
+func (sc *SystemdOsConnection) callDbus(ctx context.Context, method string, ret any,
+	args ...any) error {
 
 	ch := make(chan *dbus.Call, 1)
 	sc.Object.Go(method, 0, ch, args...)
@@ -246,7 +247,7 @@ func (s *SystemdSupervisor) RemoveServiceWatcher(serviceName string, ch chan<- *
 	}
 	for i, w := range watchers {
 		if w == ch {
-			watchers = append(watchers[:i], watchers[i+1:]...)
+			watchers = slices.Delete(watchers, i, i+1)
 			break
 		}
 	}
