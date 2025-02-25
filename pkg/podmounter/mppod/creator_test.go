@@ -46,9 +46,9 @@ func TestCreatingMountpointPods(t *testing.T) {
 		Spec: corev1.PodSpec{
 			NodeName: testNode,
 		},
-	}, &corev1.PersistentVolumeClaim{
-		Spec: corev1.PersistentVolumeClaimSpec{
-			VolumeName: testVolName,
+	}, &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testVolName,
 		},
 	})
 
