@@ -7,9 +7,13 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"net"
 	"os"
 
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -23,6 +27,7 @@ import (
 	"github.com/awslabs/aws-s3-csi-driver/pkg/podmounter/mppod"
 )
 
+var csiEndpoint = flag.String("csi-endpoint", os.Getenv("CSI_ENDPOINT"), "Unix socket path for CSI Driver to listen.")
 var mountpointNamespace = flag.String("mountpoint-namespace", os.Getenv("MOUNTPOINT_NAMESPACE"), "Namespace to spawn Mountpoint Pods in.")
 var mountpointVersion = flag.String("mountpoint-version", os.Getenv("MOUNTPOINT_VERSION"), "Version of Mountpoint within the given Mountpoint image.")
 var mountpointPriorityClassName = flag.String("mountpoint-priority-class-name", os.Getenv("MOUNTPOINT_PRIORITY_CLASS_NAME"), "Priority class name of the Mountpoint Pods.")
@@ -44,7 +49,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	err = csicontroller.NewReconciler(mgr.GetClient(), mppod.Config{
+	podConfig := mppod.Config{
 		Namespace:         *mountpointNamespace,
 		MountpointVersion: *mountpointVersion,
 		PriorityClassName: *mountpointPriorityClassName,
@@ -55,11 +60,44 @@ func main() {
 		},
 		CSIDriverVersion: version.GetVersion().DriverVersion,
 		ClusterVariant:   cluster.DetectVariant(client, log),
-	}).SetupWithManager(mgr)
+	}
+
+	err = csicontroller.NewReconciler(mgr.GetClient(), podConfig).SetupWithManager(mgr)
 	if err != nil {
 		log.Error(err, "Failed to create controller")
 		os.Exit(1)
 	}
+
+	controller := &csicontroller.Controller{
+		Client:    mgr.GetClient(),
+		Creator:   mppod.NewCreator(podConfig),
+		PodConfig: podConfig,
+	}
+	server := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		log.Info("Incoming requests", "req", req)
+		resp, err := handler(ctx, req)
+		if err != nil {
+			log.Error(err, "handler error")
+		}
+		log.Info("Response", "resp", resp)
+		return resp, err
+	}))
+	csi.RegisterIdentityServer(server, controller)
+	csi.RegisterControllerServer(server, controller)
+
+	listener, err := net.Listen("unix", *csiEndpoint)
+	if err != nil {
+		log.Error(err, "Failed to listen CSI endpoint")
+		os.Exit(1)
+	}
+
+	go func() {
+		log.Info("Starting CSI server", "endpoint", *csiEndpoint)
+		err := server.Serve(listener)
+		if err != nil {
+			log.Error(err, "Failed to serve CSI server")
+		}
+	}()
 
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		log.Error(err, "Failed to start manager")

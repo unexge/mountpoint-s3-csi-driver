@@ -46,13 +46,20 @@ func NewCreator(config Config) *Creator {
 	return &Creator{config: config}
 }
 
+type CreateContext struct {
+	Name             string
+	NodeId           string
+	VolumeId         string
+	VolumeAttributes map[string]string
+}
+
 // Create returns a new Mountpoint Pod spec to schedule for given `pod` and `pv`.
 //
 // It automatically assigns Mountpoint Pod to `pod`'s node.
 // The name of the Mountpoint Pod is consistently generated from `pod` and `pv` using `MountpointPodNameFor` function.
-func (c *Creator) Create(pod *corev1.Pod, pv *corev1.PersistentVolume) *corev1.Pod {
-	node := pod.Spec.NodeName
-	name := MountpointPodNameFor(string(pod.UID), pv.Name)
+func (c *Creator) Create(ctx CreateContext) *corev1.Pod {
+	node := ctx.NodeId
+	name := ctx.Name
 
 	mpPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -60,9 +67,9 @@ func (c *Creator) Create(pod *corev1.Pod, pv *corev1.PersistentVolume) *corev1.P
 			Namespace: c.config.Namespace,
 			Labels: map[string]string{
 				LabelMountpointVersion: c.config.MountpointVersion,
-				LabelPodUID:            string(pod.UID),
-				LabelVolumeName:        pv.Name,
-				LabelCSIDriverVersion:  c.config.CSIDriverVersion,
+				// LabelPodUID:            string(pod.UID),
+				LabelVolumeName:       ctx.VolumeId,
+				LabelCSIDriverVersion: c.config.CSIDriverVersion,
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -133,27 +140,11 @@ func (c *Creator) Create(pod *corev1.Pod, pv *corev1.PersistentVolume) *corev1.P
 		},
 	}
 
-	volumeAttributes := extractVolumeAttributes(pv)
+	volumeAttributes := ctx.VolumeAttributes
 
 	if saName := volumeAttributes[volumecontext.MountpointPodServiceAccountName]; saName != "" {
 		mpPod.Spec.ServiceAccountName = saName
 	}
 
 	return mpPod
-}
-
-// extractVolumeAttributes extracts volume attributes from given `pv`.
-// It always returns a non-nil map, and it's safe to use even though `pv` doesn't contain any volume attributes.
-func extractVolumeAttributes(pv *corev1.PersistentVolume) map[string]string {
-	csiSpec := pv.Spec.CSI
-	if csiSpec == nil {
-		return map[string]string{}
-	}
-
-	volumeAttributes := csiSpec.VolumeAttributes
-	if volumeAttributes == nil {
-		return map[string]string{}
-	}
-
-	return volumeAttributes
 }

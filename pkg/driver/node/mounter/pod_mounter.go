@@ -70,14 +70,14 @@ func NewPodMounter(podWatcher *watcher.Watcher, credProvider *credentialprovider
 //
 // If Mountpoint is already mounted at `target`, it will return early at step 2 to ensure credentials are up-to-date.
 func (pm *PodMounter) Mount(ctx context.Context, bucketName string, target string, credentialCtx credentialprovider.ProvideContext, args mountpoint.Args) error {
-	volumeName, err := pm.volumeNameFromTargetPath(target)
-	if err != nil {
-		return fmt.Errorf("Failed to extract volume name from %q: %w", target, err)
-	}
+	// volumeName, err := pm.volumeNameFromTargetPath(target)
+	// if err != nil {
+	// 	return fmt.Errorf("Failed to extract volume name from %q: %w", target, err)
+	// }
 
-	podID := credentialCtx.PodID
+	// podID := credentialCtx.PodID
 
-	err = pm.verifyOrSetupMountTarget(target)
+	err := pm.verifyOrSetupMountTarget(target)
 	if err != nil {
 		return fmt.Errorf("Failed to verify target path can be used as a mount point %q: %w", target, err)
 	}
@@ -89,7 +89,7 @@ func (pm *PodMounter) Mount(ctx context.Context, bucketName string, target strin
 
 	// TODO: If `target` is a `systemd`-mounted Mountpoint, this would return an error,
 	// but we should still update the credentials for it by calling `credProvider.Provide`.
-	pod, podPath, err := pm.waitForMountpointPod(ctx, podID, volumeName)
+	pod, podPath, err := pm.waitForMountpointPod(ctx, credentialCtx.MountpointPodName)
 	if err != nil {
 		klog.Errorf("Failed to wait for Mountpoint Pod to be ready for %q: %v", target, err)
 		return fmt.Errorf("Failed to wait for Mountpoint Pod to be ready for %q: %w", target, err)
@@ -102,6 +102,13 @@ func (pm *PodMounter) Mount(ctx context.Context, bucketName string, target strin
 	}
 
 	credentialCtx.SetWriteAndEnvPath(podCredentialsPath, mppod.PathInsideMountpointPod(mppod.KnownPathCredentials))
+
+	// IRSA
+	// long-term creds
+	// IMDS
+
+	// WEB_IDENTITY_TOKEN_PATH = <pod-uid>/sa.token
+	// WEB_IDENTITY_TOKEN_PATH = <pod-uid>/sa-driver.token
 
 	// Note that this part happens before `isMountPoint` check, as we want to update credentials even though
 	// there is an existing mount point at `target`.
@@ -184,42 +191,42 @@ func (pm *PodMounter) Mount(ctx context.Context, bucketName string, target strin
 
 // Unmount unmounts the mount point at `target` and cleans all credentials.
 func (pm *PodMounter) Unmount(ctx context.Context, target string, credentialCtx credentialprovider.CleanupContext) error {
-	volumeName, err := pm.volumeNameFromTargetPath(target)
-	if err != nil {
-		return fmt.Errorf("Failed to extract volume name from %q: %w", target, err)
-	}
+	// volumeName, err := pm.volumeNameFromTargetPath(target)
+	// if err != nil {
+	// 	return fmt.Errorf("Failed to extract volume name from %q: %w", target, err)
+	// }
 
-	podID := credentialCtx.PodID
+	// podID := credentialCtx.PodID
 
-	// TODO: If `target` is a `systemd`-mounted Mountpoint, this would return an error,
-	// but we should still unmount it and clean the credentials.
-	pod, podPath, err := pm.waitForMountpointPod(ctx, podID, volumeName)
-	if err != nil {
-		klog.Errorf("Failed to wait for Mountpoint Pod to be ready for %q: %v", target, err)
-		return fmt.Errorf("Failed to wait for Mountpoint Pod for %q: %w", target, err)
-	}
+	// // TODO: If `target` is a `systemd`-mounted Mountpoint, this would return an error,
+	// // but we should still unmount it and clean the credentials.
+	// pod, podPath, err := pm.waitForMountpointPod(ctx, podID, volumeName)
+	// if err != nil {
+	// 	klog.Errorf("Failed to wait for Mountpoint Pod to be ready for %q: %v", target, err)
+	// 	return fmt.Errorf("Failed to wait for Mountpoint Pod for %q: %w", target, err)
+	// }
 
-	credentialCtx.WritePath = pm.credentialsDir(podPath)
+	// credentialCtx.WritePath = pm.credentialsDir(podPath)
 
-	// Write `mount.exit` file to indicate Mountpoint Pod to cleanly exit.
-	podMountExitPath := mppod.PathOnHost(podPath, mppod.KnownPathMountExit)
-	_, err = os.OpenFile(podMountExitPath, os.O_RDONLY|os.O_CREATE, credentialprovider.CredentialFilePerm)
-	if err != nil {
-		klog.Errorf("Failed to send a exit message to Mountpoint Pod for %q: %s\n%s", target, err, pm.helpMessageForGettingMountpointLogs(pod))
-		return fmt.Errorf("Failed to send a exit message to Mountpoint Pod for %q: %w\n%s", target, err, pm.helpMessageForGettingMountpointLogs(pod))
-	}
+	// // Write `mount.exit` file to indicate Mountpoint Pod to cleanly exit.
+	// podMountExitPath := mppod.PathOnHost(podPath, mppod.KnownPathMountExit)
+	// _, err = os.OpenFile(podMountExitPath, os.O_RDONLY|os.O_CREATE, credentialprovider.CredentialFilePerm)
+	// if err != nil {
+	// 	klog.Errorf("Failed to send a exit message to Mountpoint Pod for %q: %s\n%s", target, err, pm.helpMessageForGettingMountpointLogs(pod))
+	// 	return fmt.Errorf("Failed to send a exit message to Mountpoint Pod for %q: %w\n%s", target, err, pm.helpMessageForGettingMountpointLogs(pod))
+	// }
 
-	err = pm.unmountTarget(target)
-	if err != nil {
-		klog.Errorf("Failed to unmount %q: %v", target, err)
-		return fmt.Errorf("Failed to unmount %q: %w", target, err)
-	}
+	// err = pm.unmountTarget(target)
+	// if err != nil {
+	// 	klog.Errorf("Failed to unmount %q: %v", target, err)
+	// 	return fmt.Errorf("Failed to unmount %q: %w", target, err)
+	// }
 
-	err = pm.credProvider.Cleanup(credentialCtx)
-	if err != nil {
-		klog.Errorf("Failed to clean up credentials for %s: %v\n%s", target, err, pm.helpMessageForGettingMountpointLogs(pod))
-		return fmt.Errorf("Failed to clean up credentials for %q: %w\n%s", target, err, pm.helpMessageForGettingMountpointLogs(pod))
-	}
+	// err = pm.credProvider.Cleanup(credentialCtx)
+	// if err != nil {
+	// 	klog.Errorf("Failed to clean up credentials for %s: %v\n%s", target, err, pm.helpMessageForGettingMountpointLogs(pod))
+	// 	return fmt.Errorf("Failed to clean up credentials for %q: %w\n%s", target, err, pm.helpMessageForGettingMountpointLogs(pod))
+	// }
 
 	return nil
 }
@@ -232,8 +239,8 @@ func (pm *PodMounter) IsMountPoint(target string) (bool, error) {
 
 // waitForMountpointPod waints until Mountpoint Pod for given `podID` and `volumeName` is in `Running` state.
 // It returns found Mountpoint Pod and it's base directory.
-func (pm *PodMounter) waitForMountpointPod(ctx context.Context, podID, volumeName string) (*corev1.Pod, string, error) {
-	podName := mppod.MountpointPodNameFor(podID, volumeName)
+func (pm *PodMounter) waitForMountpointPod(ctx context.Context, podName string) (*corev1.Pod, string, error) {
+	// podName := mppod.MountpointPodNameFor(podID, volumeName)
 
 	pod, err := pm.podWatcher.Wait(ctx, podName)
 	if err != nil {

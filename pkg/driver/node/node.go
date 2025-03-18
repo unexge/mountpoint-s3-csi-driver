@@ -18,9 +18,9 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"os"
-	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -41,6 +41,7 @@ var kubeletPath = util.KubeletPath()
 var (
 	systemdNodeCaps    = []csi.NodeServiceCapability_RPC_Type{}
 	podMounterNodeCaps = []csi.NodeServiceCapability_RPC_Type{
+		csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
 		csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP,
 	}
 )
@@ -72,19 +73,18 @@ func NewS3NodeServer(nodeID string, mounter mounter.Mounter) *S3NodeServer {
 }
 
 func (ns *S3NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
-}
+	klog.V(4).Infof("NodeStageVolume: called with args %+v", req)
 
-func (ns *S3NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
-}
+	podName := req.PublishContext["MountpointPodName"]
+	podNamespace := req.PublishContext["MountpointPodNamespace"]
+	volCtx := make(map[string]string)
+	err := json.Unmarshal([]byte(req.PublishContext["VolumeContextStr"]), &volCtx)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "Bucket name not provided")
+	}
 
-func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
-	klog.V(4).Infof("NodePublishVolume: new request: %+v", logSafeNodePublishVolumeRequest(req))
-
-	volumeID := req.GetVolumeId()
-	if len(volumeID) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Volume ID not provided")
+	if !maps.Equal(volCtx, req.VolumeContext) {
+		return nil, status.Error(codes.AlreadyExists, "Volume already mounted with different parameters")
 	}
 
 	volumeCtx := req.GetVolumeContext()
@@ -94,29 +94,12 @@ func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePubl
 		return nil, status.Error(codes.InvalidArgument, "Bucket name not provided")
 	}
 
-	target := req.GetTargetPath()
-	if len(target) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Target path not provided")
-	}
-
-	if !strings.HasPrefix(target, kubeletPath) {
-		klog.Errorf("NodePublishVolume: target path %q is not in kubelet path %q. This might cause mounting issues, please ensure you have correct kubelet path configured.", target, kubeletPath)
-	}
-
 	volCap := req.GetVolumeCapability()
 	if volCap == nil {
 		return nil, status.Error(codes.InvalidArgument, "Volume capability not provided")
 	}
 
-	if !ns.isValidVolumeCapabilities([]*csi.VolumeCapability{volCap}) {
-		return nil, status.Error(codes.InvalidArgument, "Volume capability not supported")
-	}
-
-	mountpointArgs := []string{}
-	if req.GetReadonly() || volCap.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY {
-		mountpointArgs = append(mountpointArgs, mountpoint.ArgReadOnly)
-	}
-
+	var mountpointArgs []string
 	if capMount := volCap.GetMount(); capMount != nil {
 		mountFlags := capMount.GetMountFlags()
 		mountpointArgs = append(mountpointArgs, mountFlags...)
@@ -140,15 +123,116 @@ func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePubl
 		args.SetIfAbsent(mountpoint.ArgAllowRoot, mountpoint.ArgNoValue)
 	}
 
-	klog.V(4).Infof("NodePublishVolume: mounting %s at %s with options %v", bucket, target, args.SortedList())
+	credentialCtx := credentialProvideContextFromPublishRequest(req.VolumeId, volumeCtx, args)
+	credentialCtx.MountpointPodName = podName
+	credentialCtx.MountpointPodNamespace = podNamespace
 
-	credentialCtx := credentialProvideContextFromPublishRequest(req, args)
-
-	if err := ns.Mounter.Mount(ctx, bucket, target, credentialCtx, args); err != nil {
-		os.Remove(target)
-		return nil, status.Errorf(codes.Internal, "Could not mount %q at %q: %v", bucket, target, err)
+	if err := ns.Mounter.Mount(ctx, bucket, req.GetStagingTargetPath(), credentialCtx, args); err != nil {
+		return nil, status.Errorf(codes.Internal, "Could not mount %q at %q: %v", bucket, req.GetStagingTargetPath(), err)
 	}
-	klog.V(4).Infof("NodePublishVolume: %s was mounted", target)
+	klog.V(4).Infof("NodeStageVolume: %s was staged", req.StagingTargetPath)
+
+	return &csi.NodeStageVolumeResponse{}, nil
+}
+
+func (ns *S3NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+	klog.V(4).Infof("NodeUnstageVolume: called with args %+v", req)
+	m := mount.New("")
+	err := m.Unmount(req.GetStagingTargetPath())
+	return &csi.NodeUnstageVolumeResponse{}, err
+}
+
+func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+	klog.V(4).Infof("NodePublishVolume: new request: %+v", logSafeNodePublishVolumeRequest(req))
+
+	volCtx := make(map[string]string)
+	err := json.Unmarshal([]byte(req.PublishContext["VolumeContextStr"]), &volCtx)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "Bucket name not provided")
+	}
+
+	// TODO: Check all arguments, credentials, mount options etc.
+	if volCtx[volumecontext.BucketName] != req.VolumeContext[volumecontext.BucketName] {
+		klog.V(4).Infof("NodePublishVolume: called with inccorect arguments: %#v vs %#v", volCtx, req.VolumeContext)
+		return nil, status.Error(codes.AlreadyExists, "Volume already mounted with different parameters")
+	}
+
+	m := mount.New("")
+	if err := os.MkdirAll(req.TargetPath, 0777); err != nil {
+		return nil, err
+	}
+	err = m.Mount(req.StagingTargetPath, req.TargetPath, "", []string{"bind"})
+	if err != nil {
+		return nil, err
+	}
+
+	// // volumeID := req.GetVolumeId()
+	// // if len(volumeID) == 0 {
+	// // 	return nil, status.Error(codes.InvalidArgument, "Volume ID not provided")
+	// // }
+
+	// // volumeCtx := req.GetVolumeContext()
+
+	// // bucket, ok := volumeCtx[volumecontext.BucketName]
+	// // if !ok {
+	// // 	return nil, status.Error(codes.InvalidArgument, "Bucket name not provided")
+	// // }
+
+	// // target := req.GetTargetPath()
+	// // if len(target) == 0 {
+	// // 	return nil, status.Error(codes.InvalidArgument, "Target path not provided")
+	// // }
+
+	// // if !strings.HasPrefix(target, kubeletPath) {
+	// // 	klog.Errorf("NodePublishVolume: target path %q is not in kubelet path %q. This might cause mounting issues, please ensure you have correct kubelet path configured.", target, kubeletPath)
+	// // }
+
+	// // volCap := req.GetVolumeCapability()
+	// // if volCap == nil {
+	// // 	return nil, status.Error(codes.InvalidArgument, "Volume capability not provided")
+	// // }
+
+	// // if !ns.isValidVolumeCapabilities([]*csi.VolumeCapability{volCap}) {
+	// // 	return nil, status.Error(codes.InvalidArgument, "Volume capability not supported")
+	// // }
+
+	// // mountpointArgs := []string{}
+	// // if req.GetReadonly() || volCap.GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY {
+	// // 	mountpointArgs = append(mountpointArgs, mountpoint.ArgReadOnly)
+	// // }
+
+	// // if capMount := volCap.GetMount(); capMount != nil {
+	// // 	mountFlags := capMount.GetMountFlags()
+	// // 	mountpointArgs = append(mountpointArgs, mountFlags...)
+	// // }
+
+	// // args := mountpoint.ParseArgs(mountpointArgs)
+
+	// if capMount := volCap.GetMount(); capMount != nil && util.UsePodMounter() {
+	// 	if volumeMountGroup := capMount.GetVolumeMountGroup(); volumeMountGroup != "" {
+	// 		// We need to add the following flags to support fsGroup
+	// 		// If these flags were already set by customer in PV mountOptions then we won't override them
+	// 		args.SetIfAbsent(mountpoint.ArgGid, volumeMountGroup)
+	// 		args.SetIfAbsent(mountpoint.ArgAllowOther, mountpoint.ArgNoValue)
+	// 		args.SetIfAbsent(mountpoint.ArgDirMode, filePerm770)
+	// 		args.SetIfAbsent(mountpoint.ArgFileMode, filePerm660)
+	// 	}
+	// }
+
+	// if util.UsePodMounter() && !args.Has(mountpoint.ArgAllowOther) {
+	// 	// If customer container is running as root we need to add --allow-root as Mountpoint Pod is not run as root
+	// 	args.SetIfAbsent(mountpoint.ArgAllowRoot, mountpoint.ArgNoValue)
+	// }
+
+	// // klog.V(4).Infof("NodePublishVolume: mounting %s at %s with options %v", bucket, target, args.SortedList())
+
+	// // credentialCtx := credentialProvideContextFromPublishRequest(req.VolumeId, volumeCtx, args)
+
+	// // if err := ns.Mounter.Mount(ctx, bucket, target, credentialCtx, args); err != nil {
+	// // 	os.Remove(target)
+	// // 	return nil, status.Errorf(codes.Internal, "Could not mount %q at %q: %v", bucket, target, err)
+	// // }
+	klog.V(4).Infof("NodePublishVolume: %s was mounted from %s", req.TargetPath, req.StagingTargetPath)
 
 	return &csi.NodePublishVolumeResponse{}, nil
 }
@@ -156,40 +240,47 @@ func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePubl
 func (ns *S3NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	klog.V(4).Infof("NodeUnpublishVolume: called with args %+v", req)
 
-	volumeID := req.GetVolumeId()
-	if len(volumeID) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Volume ID not provided")
-	}
+	// volumeID := req.GetVolumeId()
+	// if len(volumeID) == 0 {
+	// 	return nil, status.Error(codes.InvalidArgument, "Volume ID not provided")
+	// }
 
-	target := req.GetTargetPath()
-	if len(target) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Target path not provided")
-	}
+	// target := req.GetTargetPath()
+	// if len(target) == 0 {
+	// 	return nil, status.Error(codes.InvalidArgument, "Target path not provided")
+	// }
 
-	mounted, err := ns.Mounter.IsMountPoint(target)
-	if err != nil && os.IsNotExist(err) {
-		klog.V(4).Infof("NodeUnpublishVolume: target path %s does not exist, skipping unmount", target)
-		return &csi.NodeUnpublishVolumeResponse{}, nil
-	} else if err != nil && mount.IsCorruptedMnt(err) {
-		klog.V(4).Infof("NodeUnpublishVolume: target path %s is corrupted: %v, will try to unmount", target, err)
-		mounted = true
-	} else if err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not unmount %q: %v", target, err)
-	}
-	if !mounted {
-		klog.V(4).Infof("NodeUnpublishVolume: target path %s not mounted, skipping unmount", target)
-		return &csi.NodeUnpublishVolumeResponse{}, nil
-	}
+	// mounted, err := ns.Mounter.IsMountPoint(target)
+	// if err != nil && os.IsNotExist(err) {
+	// 	klog.V(4).Infof("NodeUnpublishVolume: target path %s does not exist, skipping unmount", target)
+	// 	return &csi.NodeUnpublishVolumeResponse{}, nil
+	// } else if err != nil && mount.IsCorruptedMnt(err) {
+	// 	klog.V(4).Infof("NodeUnpublishVolume: target path %s is corrupted: %v, will try to unmount", target, err)
+	// 	mounted = true
+	// } else if err != nil {
+	// 	return nil, status.Errorf(codes.Internal, "Could not unmount %q: %v", target, err)
+	// }
+	// if !mounted {
+	// 	klog.V(4).Infof("NodeUnpublishVolume: target path %s not mounted, skipping unmount", target)
+	// 	return &csi.NodeUnpublishVolumeResponse{}, nil
+	// }
 
-	credentialCtx := credentialCleanupContextFromUnpublishRequest(req)
+	// credentialCtx := credentialCleanupContextFromUnpublishRequest(req)
 
-	klog.V(4).Infof("NodeUnpublishVolume: unmounting %s", target)
-	err = ns.Mounter.Unmount(ctx, target, credentialCtx)
+	// klog.V(4).Infof("NodeUnpublishVolume: unmounting %s", target)
+	// err = ns.Mounter.Unmount(ctx, target, credentialCtx)
+	// if err != nil {
+	// 	return nil, status.Errorf(codes.Internal, "Could not unmount %q: %v", target, err)
+	// }
+	//
+	m := mount.New("")
+	err := m.Unmount(req.GetTargetPath())
+
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not unmount %q: %v", target, err)
+		klog.V(4).Infof("NodeUnpublishVolume: failed to unmount %+v", err)
 	}
 
-	return &csi.NodeUnpublishVolumeResponse{}, nil
+	return &csi.NodeUnpublishVolumeResponse{}, err
 }
 
 func (ns *S3NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
@@ -219,6 +310,7 @@ func (ns *S3NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGe
 		}
 		caps = append(caps, c)
 	}
+	klog.V(4).Infof("NodeGetCapabilities: returning %+v", caps)
 	return &csi.NodeGetCapabilitiesResponse{Capabilities: caps}, nil
 }
 
@@ -249,19 +341,18 @@ func (ns *S3NodeServer) isValidVolumeCapabilities(volCaps []*csi.VolumeCapabilit
 	return foundAll
 }
 
-func credentialProvideContextFromPublishRequest(req *csi.NodePublishVolumeRequest, args mountpoint.Args) credentialprovider.ProvideContext {
-	volumeCtx := req.GetVolumeContext()
+func credentialProvideContextFromPublishRequest(volId string, volumeCtx map[string]string, args mountpoint.Args) credentialprovider.ProvideContext {
 
 	podID := volumeCtx[volumecontext.CSIPodUID]
-	if podID == "" {
-		podID, _ = podIDFromTargetPath(req.GetTargetPath())
-	}
+	// if podID == "" {
+	// 	podID, _ = podIDFromTargetPath(req.GetTargetPath())
+	// }
 
 	bucketRegion, _ := args.Value(mountpoint.ArgRegion)
 
 	return credentialprovider.ProvideContext{
 		PodID:                podID,
-		VolumeID:             req.GetVolumeId(),
+		VolumeID:             volId,
 		AuthenticationSource: volumeCtx[volumecontext.AuthenticationSource],
 		PodNamespace:         volumeCtx[volumecontext.CSIPodNamespace],
 		ServiceAccountTokens: volumeCtx[volumecontext.CSIServiceAccountTokens],

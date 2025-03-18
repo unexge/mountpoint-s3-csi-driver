@@ -67,7 +67,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.reconcileMountpointPod(ctx, pod)
 	}
 
-	return r.reconcileWorkloadPod(ctx, pod)
+	return reconcile.Result{}, nil
+	// return r.reconcileWorkloadPod(ctx, pod)
 }
 
 // reconcileMountpointPod reconciles given Mountpoint `pod`, and deletes it if its completed.
@@ -234,20 +235,20 @@ func (r *Reconciler) spawnMountpointPod(
 
 	log.Info("Spawning Mountpoint Pod")
 
-	mpPod := r.mountpointPodCreator.Create(workloadPod, pv)
-	if mpPod.Name != name {
-		err := fmt.Errorf("Mountpoint Pod name mismatch %s vs %s", mpPod.Name, name)
-		log.Error(err, "Name mismatch on Mountpoint Pod")
-		return err
-	}
+	// mpPod := r.mountpointPodCreator.Create(workloadPod, pv)
+	// if mpPod.Name != name {
+	// 	err := fmt.Errorf("Mountpoint Pod name mismatch %s vs %s", mpPod.Name, name)
+	// 	log.Error(err, "Name mismatch on Mountpoint Pod")
+	// 	return err
+	// }
 
-	err := r.Create(ctx, mpPod)
-	if err != nil {
-		log.Error(err, "Failed to create Mountpoint Pod")
-		return err
-	}
+	// err := r.Create(ctx, mpPod)
+	// if err != nil {
+	// 	log.Error(err, "Failed to create Mountpoint Pod")
+	// 	return err
+	// }
 
-	log.Info("Mountpoint Pod spawned", "mountpointPodUID", mpPod.UID)
+	// log.Info("Mountpoint Pod spawned", "mountpointPodUID", mpPod.UID)
 	return nil
 }
 

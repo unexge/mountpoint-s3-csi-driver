@@ -58,6 +58,9 @@ type ProvideContext struct {
 	// EnvPath is basepath to use while creating environment variables to pass Mountpoint.
 	EnvPath string
 
+	MountpointPodName      string
+	MountpointPodNamespace string
+
 	PodID    string
 	VolumeID string
 
