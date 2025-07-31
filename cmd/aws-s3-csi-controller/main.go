@@ -7,9 +7,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -27,6 +30,7 @@ import (
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/podmounter/mppod"
 )
 
+var csiEndpoint = flag.String("csi-endpoint", os.Getenv("CSI_ENDPOINT"), "CSI Endpoint to listen.")
 var mountpointNamespace = flag.String("mountpoint-namespace", os.Getenv("MOUNTPOINT_NAMESPACE"), "Namespace to spawn Mountpoint Pods in.")
 var mountpointVersion = flag.String("mountpoint-version", os.Getenv("MOUNTPOINT_VERSION"), "Version of Mountpoint within the given Mountpoint image.")
 var mountpointPriorityClassName = flag.String("mountpoint-priority-class-name", os.Getenv("MOUNTPOINT_PRIORITY_CLASS_NAME"), "Priority class name of the Mountpoint Pods.")
@@ -93,8 +97,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
-		log.Error(err, "Failed to start manager")
-		os.Exit(1)
+	cancelCtx := signals.SetupSignalHandler()
+
+	go func() {
+		log.Info("Starting the manager...")
+		if err := mgr.Start(cancelCtx); err != nil {
+			log.Error(err, "Failed to start manager")
+			os.Exit(1)
+		}
+	}()
+
+	if *csiEndpoint != "" {
+		log.Info("Starting the CSI Controller...")
+
+		awsConfig, err := awsconfig.LoadDefaultConfig(context.TODO())
+		if err != nil {
+			log.Error(err, "Failed to load AWS config")
+			os.Exit(1)
+		}
+		client := s3.NewFromConfig(awsConfig)
+
+		csiController := csicontroller.NewCSIController(*csiEndpoint, client, log)
+
+		go func() {
+			if err := csiController.Start(cancelCtx); err != nil {
+				log.Error(err, "Failed to start CSI Controller")
+				os.Exit(1)
+			}
+		}()
 	}
+
+	<-cancelCtx.Done()
+	log.Info("Stopping the controller")
 }

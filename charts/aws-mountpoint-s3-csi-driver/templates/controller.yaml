@@ -76,3 +76,47 @@ spec:
             - name: MOUNTPOINT_HEADROOM_IMAGE
               value: {{ .Values.experimental.headroomPodImage }}
             {{- end }}
+            {{- if .Values.experimental.dynamicVolumeProvisioningFromExistingBucket }}
+            - name: CSI_ENDPOINT
+              value: /var/lib/csi/sockets/pluginproxy/csi.socket
+            {{- end }}
+
+          {{- if .Values.experimental.dynamicVolumeProvisioningFromExistingBucket }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          {{- end }}
+
+        {{- if .Values.experimental.dynamicVolumeProvisioningFromExistingBucket }}
+        - name: csi-provisioner
+          # TODO: Make it configurable.
+          image: public.ecr.aws/csi-components/csi-provisioner:v5.3.0-eksbuild.3
+          imagePullPolicy: "IfNotPresent"
+          args:
+            - "--csi-address=$(ADDRESS)"
+            # - "--http-endpoint=:8081"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.socket
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          # ports:
+          #   - containerPort: 8081
+          #     name: http-endpoint
+          #     protocol: TCP
+          # livenessProbe:
+          #   failureThreshold: 1
+          #   httpGet:
+          #     path: /healthz/leader-election
+          #     port: http-endpoint
+          #   initialDelaySeconds: 10
+          #   timeoutSeconds: 10
+          #   periodSeconds: 20
+        {{- end }}
+
+      {{- if .Values.experimental.dynamicVolumeProvisioningFromExistingBucket }}
+      volumes:
+      - name: socket-dir
+        emptyDir:
+      {{- end }}
