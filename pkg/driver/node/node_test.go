@@ -11,6 +11,7 @@ import (
 
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node"
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/credentialprovider"
+	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/envprovider"
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/mounter"
 	mock_driver "github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/mounter/mocks"
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/mountpoint"
@@ -73,6 +74,7 @@ func TestNodePublishVolume(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Any(),
+					gomock.Any(),
 					gomock.Eq(""),
 				)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -111,6 +113,7 @@ func TestNodePublishVolume(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Eq(mountpoint.ParseArgs([]string{"--read-only", "--allow-root"})),
+					gomock.Any(),
 					gomock.Eq(""),
 				)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -152,6 +155,7 @@ func TestNodePublishVolume(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Eq(mountpoint.ParseArgs([]string{"--bar", "--foo", "--read-only", "--allow-root", "--test=123"})),
+					gomock.Any(),
 					gomock.Eq(""),
 				)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -221,6 +225,7 @@ func TestNodePublishVolume(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Eq(mountpoint.ParseArgs([]string{"--read-only", "--allow-root", "--test=123"})),
+					gomock.Any(),
 					gomock.Eq(""),
 				).Return(nil)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -297,6 +302,7 @@ func TestNodePublishVolumeForPodMounter(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Eq(mountpoint.ParseArgs([]string{"--gid=123", "--allow-other", "--dir-mode=770", "--file-mode=660"})),
+					gomock.Any(),
 					gomock.Eq("123"),
 				).Return(nil)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -338,6 +344,7 @@ func TestNodePublishVolumeForPodMounter(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Eq(mountpoint.ParseArgs([]string{"--gid=123", "--allow-other", "--dir-mode=770", "--file-mode=660"})),
+					gomock.Any(),
 					gomock.Eq("123"),
 				).Return(nil)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -379,6 +386,7 @@ func TestNodePublishVolumeForPodMounter(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Eq(mountpoint.ParseArgs([]string{"--allow-root"})),
+					gomock.Any(),
 					gomock.Eq(""),
 				).Return(nil)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -420,6 +428,7 @@ func TestNodePublishVolumeForPodMounter(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Eq(mountpoint.ParseArgs([]string{"--allow-other"})),
+					gomock.Any(),
 					gomock.Eq(""),
 				).Return(nil)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -462,6 +471,7 @@ func TestNodePublishVolumeForPodMounter(t *testing.T) {
 						AuthenticationSource: credentialprovider.AuthenticationSourceDriver,
 					}),
 					gomock.Eq(mountpoint.ParseArgs(mountFlags)),
+					gomock.Any(),
 					gomock.Eq("123"),
 				).Return(nil)
 				_, err := nodeTestEnv.server.NodePublishVolume(ctx, req)
@@ -607,7 +617,7 @@ var _ mounter.Mounter = &dummyMounter{}
 
 type dummyMounter struct{}
 
-func (d *dummyMounter) Mount(ctx context.Context, bucketName string, target string, provideCtx credentialprovider.ProvideContext, args mountpoint.Args, fsGroup string) error {
+func (d *dummyMounter) Mount(ctx context.Context, bucketName string, target string, provideCtx credentialprovider.ProvideContext, args mountpoint.Args, env envprovider.Environment, fsGroup string) error {
 	return nil
 }
 

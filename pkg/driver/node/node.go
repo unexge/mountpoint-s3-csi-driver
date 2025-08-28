@@ -27,8 +27,10 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
 	"k8s.io/mount-utils"
+	"sigs.k8s.io/yaml"
 
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/credentialprovider"
+	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/envprovider"
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/mounter"
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/targetpath"
 	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/node/volumecontext"
@@ -78,6 +80,11 @@ func (ns *S3NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnst
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
+type envNameValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	klog.V(4).Infof("NodePublishVolume: new request: %+v", logSafeNodePublishVolumeRequest(req))
 
@@ -87,6 +94,19 @@ func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePubl
 	}
 
 	volumeCtx := req.GetVolumeContext()
+
+	mountpointEnv := envprovider.Environment{}
+	var parsedEnv []envNameValue
+	mointpointContainerEnv := volumeCtx[volumecontext.MountpointContainerEnv]
+	if mointpointContainerEnv != "" {
+		err := yaml.Unmarshal([]byte(mointpointContainerEnv), &parsedEnv)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "Invalid Mountpoint Container env")
+		}
+	}
+	for _, keyValue := range parsedEnv {
+		mountpointEnv.Set(keyValue.Name, keyValue.Value)
+	}
 
 	bucket, ok := volumeCtx[volumecontext.BucketName]
 	if !ok {
@@ -149,7 +169,7 @@ func (ns *S3NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePubl
 
 	credentialCtx := credentialProvideContextFromPublishRequest(req, args)
 
-	if err := ns.Mounter.Mount(ctx, bucket, target, credentialCtx, args, fsGroup); err != nil {
+	if err := ns.Mounter.Mount(ctx, bucket, target, credentialCtx, args, mountpointEnv, fsGroup); err != nil {
 		os.Remove(target)
 		return nil, status.Errorf(codes.Internal, "Could not mount %q at %q: %v", bucket, target, err)
 	}
